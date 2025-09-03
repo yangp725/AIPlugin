@@ -1,0 +1,381 @@
+// 弹出窗口脚本
+class PopupScript {
+  constructor() {
+    this.init();
+  }
+
+  init() {
+    // 加载保存的API密钥
+    this.loadApiKey();
+    
+    // 绑定tab切换事件
+    this.bindTabEvents();
+    
+    // 获取所有按钮和输入框
+    this.saveApiKeyBtn = document.getElementById('saveApiKey');
+    this.updateApiKeyBtn = document.getElementById('updateApiKey');
+    this.explainBtn = document.getElementById('explainBtn');
+    this.translateBtn = document.getElementById('translateBtn');
+    this.explainSelectedBtn = document.getElementById('explainSelectedBtn');
+    this.translateSelectedBtn = document.getElementById('translateSelectedBtn');
+    this.chatBtn = document.getElementById('chatBtn'); // 新增对话按钮
+    this.inputText = document.getElementById('inputText'); // 输入文本框
+
+    // 绑定事件
+    this.saveApiKeyBtn.addEventListener('click', this.saveApiKey.bind(this));
+    this.updateApiKeyBtn.addEventListener('click', this.updateApiKey.bind(this));
+    this.explainBtn.addEventListener('click', this.explainText.bind(this));
+    this.translateBtn.addEventListener('click', this.translateText.bind(this));
+    this.explainSelectedBtn.addEventListener('click', this.explainSelectedText.bind(this));
+    this.translateSelectedBtn.addEventListener('click', this.translateSelectedText.bind(this));
+    this.chatBtn.addEventListener('click', this.directChat.bind(this)); // 新增对话事件
+  }
+
+  bindTabEvents() {
+    const tabBtns = document.querySelectorAll('.tab-btn');
+    const tabContents = document.querySelectorAll('.tab-content');
+    
+    tabBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const targetTab = btn.getAttribute('data-tab');
+        
+        // 更新按钮状态
+        tabBtns.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        
+        // 更新内容显示
+        tabContents.forEach(content => {
+          content.classList.remove('active');
+          if (content.id === `${targetTab}-tab`) {
+            content.classList.add('active');
+          }
+        });
+      });
+    });
+  }
+
+  async loadApiKey() {
+    try {
+      const result = await chrome.storage.sync.get(['apiKey']);
+      if (result.apiKey) {
+        document.getElementById('apiKey').value = result.apiKey;
+        // 如果已有API密钥，显示已保存状态
+        this.showSavedState();
+      }
+    } catch (error) {
+      console.error('加载API密钥失败:', error);
+    }
+  }
+
+  async saveApiKey() {
+    const apiKey = document.getElementById('apiKey').value.trim();
+    
+    if (!apiKey) {
+      this.showStatus('请输入API密钥', 'error');
+      return;
+    }
+
+    // 显示保存中状态
+    this.showStatus('正在保存API密钥...', 'success');
+    
+    try {
+      console.log('发送API密钥保存请求...');
+      console.log('API密钥长度:', apiKey.length);
+      
+      // 直接保存到存储，避免消息传递问题
+      await chrome.storage.sync.set({ apiKey: apiKey });
+      console.log('API密钥已保存到存储');
+      
+      // 发送消息到background script更新服务
+      chrome.runtime.sendMessage({
+        type: 'SET_API_KEY',
+        apiKey: apiKey
+      });
+      
+      console.log('保存成功，切换到已保存状态');
+      this.showStatus('✅ API密钥保存成功！', 'success');
+      // 保存成功后切换到已保存状态
+      this.showSavedState();
+      
+    } catch (error) {
+      console.error('保存API密钥失败:', error);
+      this.showStatus('❌ 保存API密钥失败: ' + error.message, 'error');
+    }
+  }
+
+  async explainText() {
+    const text = document.getElementById('inputText').value.trim();
+    const streamMode = document.getElementById('streamMode').checked;
+    
+    if (!text) {
+      this.showStatus('请在文本框中输入要解释的文本', 'error');
+      return;
+    }
+
+    try {
+      this.showStatus('正在解释文本...', 'success');
+      
+      if (streamMode) {
+        // 流式响应处理
+        await this.handleStreamResponse('EXPLAIN_TEXT_STREAM', text);
+      } else {
+        // 非流式响应处理
+        const response = await chrome.runtime.sendMessage({
+          type: 'EXPLAIN_TEXT',
+          text: text,
+          stream: false
+        });
+        
+        console.log('解释结果:', response);
+        this.showResultInPopup(response, text);
+      }
+      
+    } catch (error) {
+      console.error('解释文本失败:', error);
+      this.showStatus('解释文本失败: ' + error.message, 'error');
+    }
+  }
+
+  async translateText() {
+    const text = document.getElementById('inputText').value.trim();
+    const streamMode = document.getElementById('streamMode').checked;
+    
+    if (!text) {
+      this.showStatus('请在文本框中输入要翻译的文本', 'error');
+      return;
+    }
+
+    try {
+      this.showStatus('正在翻译文本...', 'success');
+      
+      if (streamMode) {
+        // 流式响应处理
+        await this.handleStreamResponse('TRANSLATE_TEXT_STREAM', text);
+      } else {
+        // 非流式响应处理
+        const response = await chrome.runtime.sendMessage({
+          type: 'TRANSLATE_TEXT',
+          text: text,
+          stream: false
+        });
+        
+        console.log('翻译结果:', response);
+        this.showResultInPopup(response, text);
+      }
+      
+    } catch (error) {
+      console.error('翻译文本失败:', error);
+      this.showStatus('翻译文本失败: ' + error.message, 'error');
+    }
+  }
+
+  async directChat() {
+    const text = this.inputText.value.trim();
+    if (text) {
+      const streamMode = document.getElementById('streamMode').checked;
+      if (streamMode) {
+        // 流式响应处理
+        await this.handleStreamResponse('DIRECT_CHAT_STREAM', text);
+      } else {
+        // 非流式响应处理
+        const response = await chrome.runtime.sendMessage({
+          type: 'DIRECT_CHAT',
+          text: text,
+          stream: false
+        });
+        this.showResultInPopup(response, text);
+      }
+    } else {
+      this.showStatus('请输入对话内容', 'error');
+    }
+  }
+
+  async explainSelectedText() {
+    try {
+      // 获取当前活动标签页
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      const activeTab = tabs[0];
+      
+      // 从content script获取选中的文本
+      const response = await chrome.tabs.sendMessage(activeTab.id, {
+        type: 'GET_SELECTED_TEXT'
+      });
+      
+      if (response && response.text) {
+        // 使用流式响应处理选中的文本
+        await this.handleStreamResponse('EXPLAIN_TEXT_STREAM', response.text);
+      } else {
+        this.showStatus('请先选中要解释的文本', 'error');
+      }
+    } catch (error) {
+      console.error('解释选中文本失败:', error);
+      this.showStatus('解释选中文本失败: ' + error.message, 'error');
+    }
+  }
+
+  async translateSelectedText() {
+    try {
+      // 获取当前活动标签页
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      const activeTab = tabs[0];
+      
+      // 从content script获取选中的文本
+      const response = await chrome.tabs.sendMessage(activeTab.id, {
+        type: 'GET_SELECTED_TEXT'
+      });
+      
+      if (response && response.text) {
+        // 使用流式响应处理选中的文本
+        await this.handleStreamResponse('TRANSLATE_TEXT_STREAM', response.text);
+      } else {
+        this.showStatus('请先选中要翻译的文本', 'error');
+      }
+    } catch (error) {
+      console.error('翻译选中文本失败:', error);
+      this.showStatus('翻译选中文本失败: ' + error.message, 'error');
+    }
+  }
+
+  showSavedState() {
+    console.log('切换到已保存状态');
+    // 隐藏保存按钮，显示已保存按钮
+    const saveButton = document.getElementById('saveApiKey');
+    const updateButton = document.getElementById('updateApiKey');
+    
+    if (saveButton && updateButton) {
+      saveButton.style.display = 'none';
+      updateButton.style.display = 'block';
+      console.log('按钮状态切换成功');
+    } else {
+      console.error('找不到按钮元素');
+    }
+  }
+
+  showEditState() {
+    // 显示保存按钮，隐藏已保存按钮
+    document.getElementById('saveApiKey').style.display = 'block';
+    document.getElementById('updateApiKey').style.display = 'none';
+  }
+
+  updateApiKey() {
+    // 点击更新按钮时，切换到编辑状态
+    this.showEditState();
+    // 清空输入框，让用户重新输入
+    document.getElementById('apiKey').value = '';
+    // 聚焦到输入框
+    document.getElementById('apiKey').focus();
+    this.showStatus('请重新输入API密钥', 'success');
+  }
+
+  async handleStreamResponse(actionType, text) {
+    const resultContainer = this.createStreamResultContainer(text);
+    this.updateStreamResult(resultContainer, ''); // 清空"正在处理中"
+
+    try {
+      const port = chrome.runtime.connect({ name: 'llm-stream' });
+
+      port.postMessage({ type: actionType, text: text });
+
+      port.onMessage.addListener((message) => {
+        switch (message.type) {
+          case 'STREAM_START':
+            console.log('流式传输开始...');
+            break;
+          case 'STREAM_DATA':
+            this.updateStreamResult(resultContainer, message.content);
+            break;
+          case 'STREAM_END':
+            console.log('流式传输结束');
+            port.disconnect();
+            break;
+          case 'STREAM_ERROR':
+            console.error('流式传输错误:', message.error);
+            this.updateStreamResult(resultContainer, `\n错误: ${message.error}`);
+            port.disconnect();
+            break;
+        }
+      });
+
+      port.onDisconnect.addListener(() => {
+        console.log('端口已断开');
+      });
+
+    } catch (error) {
+      console.error('创建端口连接失败:', error);
+      this.updateStreamResult(resultContainer, `连接失败: ${error.message}`);
+    }
+  }
+
+  createStreamResultContainer(originalText) {
+    // 创建新的流式结果容器
+    const resultContainer = document.createElement('div');
+    resultContainer.className = 'result-container';
+    resultContainer.innerHTML = `
+      <div class="result-content">
+        <div class="stream-content">正在处理中...</div>
+        <div class="stream-cursor">|</div>
+      </div>
+    `;
+
+    // 插入到结果区域
+    const resultArea = document.getElementById('resultArea');
+    resultArea.innerHTML = '';
+    resultArea.appendChild(resultContainer);
+    
+    // 隐藏状态消息
+    const statusElement = document.getElementById('status');
+    statusElement.style.display = 'none';
+    
+    return resultContainer;
+  }
+
+  updateStreamResult(container, content) {
+    const streamContent = container.querySelector('.stream-content');
+    if (streamContent) {
+      // 如果是"正在处理中..."，先清空
+      if (streamContent.textContent === '正在处理中...') {
+        streamContent.textContent = '';
+      }
+      streamContent.textContent += content;
+      // 自动滚动到底部
+      streamContent.scrollTop = streamContent.scrollHeight;
+    }
+  }
+
+  showResultInPopup(result, originalText) {
+    // 创建结果显示区域
+    const resultContainer = document.createElement('div');
+    resultContainer.className = 'result-container';
+    resultContainer.innerHTML = `
+      <div class="result-content">
+        ${result}
+      </div>
+    `;
+
+    // 插入到结果区域
+    const resultArea = document.getElementById('resultArea');
+    resultArea.innerHTML = '';
+    resultArea.appendChild(resultContainer);
+    
+    // 隐藏状态消息
+    const statusElement = document.getElementById('status');
+    statusElement.style.display = 'none';
+  }
+
+  showStatus(message, type) {
+    const statusElement = document.getElementById('status');
+    statusElement.textContent = message;
+    statusElement.className = `status ${type}`;
+    statusElement.style.display = 'block';
+    
+    // 根据消息类型设置不同的显示时间
+    const displayTime = type === 'success' ? 5000 : 3000; // 成功消息显示5秒，错误消息显示3秒
+    
+    setTimeout(() => {
+      statusElement.style.display = 'none';
+    }, displayTime);
+  }
+}
+
+// 初始化弹出窗口脚本
+new PopupScript();

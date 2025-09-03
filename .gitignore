@@ -1,0 +1,67 @@
+# 敏感信息
+apis/key.txt
+*.key
+*.pem
+*.p12
+*.pfx
+
+# 测试文件
+unit_test/
+test_*.js
+test_*.cjs
+test_*.sh
+*_test.js
+*_test.cjs
+*_test.sh
+test/
+tests/
+__tests__/
+
+# 覆盖率报告
+coverage/
+*.lcov
+*.xml
+test_*.html
+*_test.html
+
+# 依赖文件
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# 构建文件
+dist/
+build/
+*.min.js
+*.min.css
+
+# 临时文件
+*.tmp
+*.temp
+*.log
+*.cache
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 环境变量
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# 其他
+*.bak
+*.backup
+*.old
