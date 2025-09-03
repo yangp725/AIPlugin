@@ -1,4 +1,5 @@
 # 敏感信息
+apis/
 apis/key.txt
 *.key
 *.pem
@@ -70,3 +71,4 @@ desktop.ini
 # 特定文件
 INSTALL.md
 DEVELOPMENT.md
+icon
