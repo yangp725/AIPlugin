@@ -29,6 +29,7 @@ node_modules/
 package-lock.json
 yarn.lock
 pnpm-lock.yaml
+package.json
 
 # 构建文件
 dist/
@@ -65,3 +66,7 @@ desktop.ini
 *.bak
 *.backup
 *.old
+
+# 特定文件
+INSTALL.md
+DEVELOPMENT.md
