@@ -233,10 +233,17 @@ class BackgroundScript {
       }
     }
 
+    // 创建右键菜单
+    this.createContextMenus();
+
     // 监听来自content script或popup的消息
     chrome.runtime.onMessage.addListener(this.handleMessage.bind(this));
     // 监听长连接
     chrome.runtime.onConnect.addListener(this.handleConnection.bind(this));
+    // 监听右键菜单点击事件
+    chrome.contextMenus.onClicked.addListener(this.handleContextMenuClick.bind(this));
+    // 监听右键菜单显示事件
+    chrome.contextMenus.onShown.addListener(this.updateContextMenuTitle.bind(this));
     console.log('Background: 消息和连接监听器已设置');
   }
 
@@ -368,14 +375,74 @@ class BackgroundScript {
     console.log('Background: API设置保存完成');
   }
 
-  showError(message) {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      chrome.tabs.sendMessage(tabs[0].id, {
-        type: 'SHOW_RESULT',
-        result: `<div style="color: red;">${message}</div>`,
-        originalText: ''
+  createContextMenus() {
+    // 清除现有菜单
+    chrome.contextMenus.removeAll(() => {
+      // 创建解释选中文本菜单
+      chrome.contextMenus.create({
+        id: 'explain-selected-text',
+        title: '解释选中文本',
+        contexts: ['selection']
+      });
+
+      // 创建翻译选中文本菜单
+      chrome.contextMenus.create({
+        id: 'translate-selected-text',
+        title: '翻译选中文本',
+        contexts: ['selection']
       });
     });
+  }
+
+  // 更新右键菜单标题，显示选中文本的长度
+  updateContextMenuTitle(info) {
+    const selectedText = info.selectionText.trim();
+    const textLength = selectedText.length;
+    
+    chrome.contextMenus.update('explain-selected-text', {
+      title: `解释选中文本 (${textLength}字符)`
+    });
+    
+    chrome.contextMenus.update('translate-selected-text', {
+      title: `翻译选中文本 (${textLength}字符)`
+    });
+  }
+
+  async handleContextMenuClick(info, tab) {
+    const selectedText = info.selectionText.trim();
+    
+    if (!selectedText) {
+      console.log('没有选中文本');
+      return;
+    }
+
+    // 检查API密钥是否已设置
+    if (!this.apiKey) {
+      console.log('API密钥未设置，无法执行操作');
+      return;
+    }
+
+    try {
+      // 打开插件弹窗
+      await chrome.action.openPopup();
+      
+      // 等待弹窗打开后发送消息
+      setTimeout(async () => {
+        try {
+          // 发送消息到popup，包含选中的文本和操作类型
+          await chrome.runtime.sendMessage({
+            type: 'CONTEXT_MENU_ACTION',
+            text: selectedText,
+            action: info.menuItemId
+          });
+        } catch (error) {
+          console.error('发送右键菜单消息失败:', error);
+        }
+      }, 200); // 增加等待时间确保弹窗完全打开
+      
+    } catch (error) {
+      console.error('打开插件弹窗失败:', error);
+    }
   }
 }
 

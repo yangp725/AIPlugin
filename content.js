@@ -68,7 +68,6 @@ class ContentScript {
     this.resultPopup.innerHTML = `
       <div class="result-content">
         <div class="stream-content">正在处理中...</div>
-        <div class="stream-cursor">|</div>
       </div>
     `;
 

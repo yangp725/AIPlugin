@@ -8,6 +8,9 @@ class PopupScript {
     // 加载保存的API密钥
     this.loadApiKey();
     
+    // 加载缓存的历史记录
+    this.loadHistory();
+    
     // 绑定tab切换事件
     this.bindTabEvents();
     
@@ -16,19 +19,20 @@ class PopupScript {
     this.updateApiKeyBtn = document.getElementById('updateApiKey');
     this.explainBtn = document.getElementById('explainBtn');
     this.translateBtn = document.getElementById('translateBtn');
-    this.explainSelectedBtn = document.getElementById('explainSelectedBtn');
-    this.translateSelectedBtn = document.getElementById('translateSelectedBtn');
     this.chatBtn = document.getElementById('chatBtn'); // 新增对话按钮
     this.inputText = document.getElementById('inputText'); // 输入文本框
+    this.clearHistoryBtn = document.getElementById('clearHistory'); // 清除历史按钮
 
     // 绑定事件
     this.saveApiKeyBtn.addEventListener('click', this.saveApiKey.bind(this));
     this.updateApiKeyBtn.addEventListener('click', this.updateApiKey.bind(this));
     this.explainBtn.addEventListener('click', this.explainText.bind(this));
     this.translateBtn.addEventListener('click', this.translateText.bind(this));
-    this.explainSelectedBtn.addEventListener('click', this.explainSelectedText.bind(this));
-    this.translateSelectedBtn.addEventListener('click', this.translateSelectedText.bind(this));
     this.chatBtn.addEventListener('click', this.directChat.bind(this)); // 新增对话事件
+    this.clearHistoryBtn.addEventListener('click', this.clearHistory.bind(this)); // 清除历史事件
+
+    // 监听来自background的消息
+    chrome.runtime.onMessage.addListener(this.handleBackgroundMessage.bind(this));
   }
 
   bindTabEvents() {
@@ -65,6 +69,52 @@ class PopupScript {
     } catch (error) {
       console.error('加载API密钥失败:', error);
     }
+  }
+
+  async loadHistory() {
+    try {
+      const result = await chrome.storage.sync.get(['lastInput', 'lastResult', 'lastAction']);
+      if (result.lastInput) {
+        // 恢复上一次的输入
+        document.getElementById('inputText').value = result.lastInput;
+      }
+      if (result.lastResult) {
+        // 恢复上一次的结果
+        this.showCachedResult(result.lastResult, result.lastAction || '');
+      }
+    } catch (error) {
+      console.error('加载历史记录失败:', error);
+    }
+  }
+
+  async saveHistory(input, result, action) {
+    try {
+      await chrome.storage.sync.set({
+        lastInput: input,
+        lastResult: result,
+        lastAction: action,
+        lastUpdateTime: Date.now()
+      });
+    } catch (error) {
+      console.error('保存历史记录失败:', error);
+    }
+  }
+
+  showCachedResult(result, action) {
+    const resultArea = document.getElementById('resultArea');
+    const actionText = action ? `[${action}] ` : '';
+    const timestamp = new Date().toLocaleString();
+    
+    resultArea.innerHTML = `
+      <div class="result-container">
+        <div class="result-content">
+          <div style="color: #666; font-size: 11px; margin-bottom: 8px;">
+            ${actionText}上次结果 (${timestamp})
+          </div>
+          <div class="stream-content">${result}</div>
+        </div>
+      </div>
+    `;
   }
 
   async saveApiKey() {
@@ -118,6 +168,8 @@ class PopupScript {
       if (streamMode) {
         // 流式响应处理
         await this.handleStreamResponse('EXPLAIN_TEXT_STREAM', text);
+        // 保存历史记录
+        await this.saveHistory(text, '解释完成', '解释文本');
       } else {
         // 非流式响应处理
         const response = await chrome.runtime.sendMessage({
@@ -128,6 +180,8 @@ class PopupScript {
         
         console.log('解释结果:', response);
         this.showResultInPopup(response, text);
+        // 保存历史记录
+        await this.saveHistory(text, response, '解释文本');
       }
       
     } catch (error) {
@@ -151,6 +205,8 @@ class PopupScript {
       if (streamMode) {
         // 流式响应处理
         await this.handleStreamResponse('TRANSLATE_TEXT_STREAM', text);
+        // 保存历史记录
+        await this.saveHistory(text, '翻译完成', '翻译文本');
       } else {
         // 非流式响应处理
         const response = await chrome.runtime.sendMessage({
@@ -161,6 +217,8 @@ class PopupScript {
         
         console.log('翻译结果:', response);
         this.showResultInPopup(response, text);
+        // 保存历史记录
+        await this.saveHistory(text, response, '翻译文本');
       }
       
     } catch (error) {
@@ -176,6 +234,8 @@ class PopupScript {
       if (streamMode) {
         // 流式响应处理
         await this.handleStreamResponse('DIRECT_CHAT_STREAM', text);
+        // 保存历史记录
+        await this.saveHistory(text, '对话完成', '直接对话');
       } else {
         // 非流式响应处理
         const response = await chrome.runtime.sendMessage({
@@ -184,55 +244,11 @@ class PopupScript {
           stream: false
         });
         this.showResultInPopup(response, text);
+        // 保存历史记录
+        await this.saveHistory(text, response, '直接对话');
       }
     } else {
       this.showStatus('请输入对话内容', 'error');
-    }
-  }
-
-  async explainSelectedText() {
-    try {
-      // 获取当前活动标签页
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      const activeTab = tabs[0];
-      
-      // 从content script获取选中的文本
-      const response = await chrome.tabs.sendMessage(activeTab.id, {
-        type: 'GET_SELECTED_TEXT'
-      });
-      
-      if (response && response.text) {
-        // 使用流式响应处理选中的文本
-        await this.handleStreamResponse('EXPLAIN_TEXT_STREAM', response.text);
-      } else {
-        this.showStatus('请先选中要解释的文本', 'error');
-      }
-    } catch (error) {
-      console.error('解释选中文本失败:', error);
-      this.showStatus('解释选中文本失败: ' + error.message, 'error');
-    }
-  }
-
-  async translateSelectedText() {
-    try {
-      // 获取当前活动标签页
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      const activeTab = tabs[0];
-      
-      // 从content script获取选中的文本
-      const response = await chrome.tabs.sendMessage(activeTab.id, {
-        type: 'GET_SELECTED_TEXT'
-      });
-      
-      if (response && response.text) {
-        // 使用流式响应处理选中的文本
-        await this.handleStreamResponse('TRANSLATE_TEXT_STREAM', response.text);
-      } else {
-        this.showStatus('请先选中要翻译的文本', 'error');
-      }
-    } catch (error) {
-      console.error('翻译选中文本失败:', error);
-      this.showStatus('翻译选中文本失败: ' + error.message, 'error');
     }
   }
 
@@ -286,6 +302,9 @@ class PopupScript {
             break;
           case 'STREAM_END':
             console.log('流式传输结束');
+            // 保存完整的历史记录
+            const finalResult = resultContainer.querySelector('.stream-content').textContent;
+            this.saveHistory(text, finalResult, this.getActionName(actionType));
             port.disconnect();
             break;
           case 'STREAM_ERROR':
@@ -306,6 +325,85 @@ class PopupScript {
     }
   }
 
+  async clearHistory() {
+    try {
+      await chrome.storage.sync.remove(['lastInput', 'lastResult', 'lastAction', 'lastUpdateTime']);
+      // 清空输入框和结果区域
+      document.getElementById('inputText').value = '';
+      document.getElementById('resultArea').innerHTML = '';
+      this.showStatus('历史记录已清除', 'success');
+    } catch (error) {
+      console.error('清除历史记录失败:', error);
+      this.showStatus('清除历史记录失败: ' + error.message, 'error');
+    }
+  }
+
+  async handleBackgroundMessage(message, sender, sendResponse) {
+    console.log('Popup收到background消息:', message);
+    
+    if (message.type === 'CONTEXT_MENU_ACTION') {
+      // 处理右键菜单操作
+      await this.handleContextMenuAction(message.text, message.action);
+    }
+  }
+
+  async handleContextMenuAction(selectedText, action) {
+    try {
+      // 将选中的文本填入输入框
+      document.getElementById('inputText').value = selectedText;
+      
+      // 切换到功能操作标签
+      this.switchToFunctionTab();
+      
+      // 显示状态信息
+      this.showStatus('正在处理选中的文本...', 'success');
+      
+      // 根据操作类型执行相应功能
+      switch (action) {
+        case 'explain-selected-text':
+          await this.explainText();
+          break;
+        case 'translate-selected-text':
+          await this.translateText();
+          break;
+        default:
+          console.log('未知的操作类型:', action);
+          this.showStatus('未知的操作类型', 'error');
+      }
+    } catch (error) {
+      console.error('处理右键菜单操作失败:', error);
+      this.showStatus('处理右键菜单操作失败: ' + error.message, 'error');
+    }
+  }
+
+  switchToFunctionTab() {
+    // 切换到功能操作标签
+    const functionTab = document.querySelector('[data-tab="function"]');
+    const settingsTab = document.querySelector('[data-tab="settings"]');
+    const functionContent = document.getElementById('function-tab');
+    const settingsContent = document.getElementById('settings-tab');
+    
+    if (functionTab && settingsTab && functionContent && settingsContent) {
+      functionTab.classList.add('active');
+      settingsTab.classList.remove('active');
+      functionContent.classList.add('active');
+      settingsContent.classList.remove('active');
+    }
+  }
+
+  getActionName(actionType) {
+    switch (actionType) {
+      case 'DIRECT_CHAT_STREAM':
+        return '直接对话';
+      case 'EXPLAIN_TEXT_STREAM':
+        return '解释文本';
+      case 'TRANSLATE_TEXT_STREAM':
+        return '翻译文本';
+      default:
+        return '未知操作';
+    }
+  }
+
   createStreamResultContainer(originalText) {
     // 创建新的流式结果容器
     const resultContainer = document.createElement('div');
@@ -313,7 +411,6 @@ class PopupScript {
     resultContainer.innerHTML = `
       <div class="result-content">
         <div class="stream-content">正在处理中...</div>
-        <div class="stream-cursor">|</div>
       </div>
     `;
 
