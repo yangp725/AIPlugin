@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Query Selection Extensions",
+  "name": "AI Plugin",
   "version": "1.0",
   "description": "A Chrome extension for querying and translating selected text using LLM API",
   "permissions": [
@@ -14,7 +14,7 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Query Selection Extensions"
+    "default_title": "AI Plugin"
   },
   "content_scripts": [
     {
