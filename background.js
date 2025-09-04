@@ -37,9 +37,7 @@ class LLMService {
       console.log('API响应状态:', response.status);
 
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error('API错误响应:', errorText);
-        throw new Error(`API request failed: ${response.status} - ${errorText}`);
+        throw new Error(`API request failed: ${response.status}`);
       }
 
       if (stream) {
@@ -177,7 +175,7 @@ class LLMService {
 
   // 检索功能 - 对选中内容进行解释
   async explainText(text, stream = true) {
-    const prompt = `请对以下内容进行详细解释：\n\n${text}`;
+    const prompt = `请对以下内容进行解释：\n\n${text}`;
     return await this.callAPI(prompt, 'doubao-seed-1-6-thinking-250715', stream);
   }
 
@@ -215,6 +213,7 @@ class BackgroundScript {
   constructor() {
     this.llmService = null;
     this.apiKey = null;
+    this.modelName = 'doubao-seed-1-6-thinking-250715'; // 默认模型名称
     this.init();
   }
 
@@ -233,17 +232,10 @@ class BackgroundScript {
       }
     }
 
-    // 创建右键菜单
-    this.createContextMenus();
-
     // 监听来自content script或popup的消息
     chrome.runtime.onMessage.addListener(this.handleMessage.bind(this));
     // 监听长连接
     chrome.runtime.onConnect.addListener(this.handleConnection.bind(this));
-    // 监听右键菜单点击事件
-    chrome.contextMenus.onClicked.addListener(this.handleContextMenuClick.bind(this));
-    // 监听右键菜单显示事件
-    chrome.contextMenus.onShown.addListener(this.updateContextMenuTitle.bind(this));
     console.log('Background: 消息和连接监听器已设置');
   }
 
@@ -271,8 +263,20 @@ class BackgroundScript {
           sendResponse('翻译文本失败: ' + error.message);
         });
         return true; // 保持消息通道开放
+      case 'CUSTOM_PROMPT':
+        // 自定义提示词处理
+        this.handleCustomPrompt(message.text, message.prompt, false).then(result => {
+          sendResponse(result);
+        }).catch(error => {
+          sendResponse('自定义处理失败: ' + error.message);
+        });
+        return true; // 保持消息通道开放
       case 'SET_API_KEY':
-        this.setApiKey(message.apiKey, message.modelName);
+        this.setApiKey(message.apiKey);
+        break;
+      case 'SET_MODEL_NAME':
+        this.modelName = message.modelName || 'doubao-seed-1-6-thinking-250715';
+        chrome.storage.sync.set({ modelName: this.modelName });
         break;
     }
   }
@@ -293,6 +297,9 @@ class BackgroundScript {
         case 'DIRECT_CHAT_STREAM':
           this.handleStreamRequest(message.text, 'direct_chat', port);
           break;
+        case 'CUSTOM_PROMPT_STREAM':
+          this.handleStreamRequest(message.text, 'custom', port, message.prompt);
+          break;
       }
     });
 
@@ -301,7 +308,7 @@ class BackgroundScript {
     });
   }
 
-  async handleStreamRequest(text, action, port) {
+  async handleStreamRequest(text, action, port, customPrompt = null) {
     try {
       if (!this.llmService) {
         throw new Error('API密钥未设置');
@@ -313,13 +320,19 @@ class BackgroundScript {
       } else if (action === 'translate') {
         const isChinese = /[\u4e00-\u9fff]/.test(text);
         prompt = isChinese ? `请将以下内容翻译成英文：\n\n${text}` : `请将以下内容翻译成中文：\n\n${text}`;
+      } else if (action === 'custom') {
+        // 自定义prompt：如含 {text} 占位符则替换；否则直接拼接输入
+        if (customPrompt && customPrompt.includes('{text}')) {
+          prompt = customPrompt.replace('{text}', text);
+        } else {
+          prompt = `${customPrompt}\n\n${text}`;
+        }
       } else { // direct_chat
         prompt = text;
       }
       
       // 直接调用流式API，并通过port传递数据
-      const modelToUse = this.modelName || 'doubao-seed-1-6-thinking-250715';
-      await this.llmService.callAPI(prompt, modelToUse, true, port);
+      await this.llmService.callAPI(prompt, this.modelName, true, port);
 
     } catch (error) {
       console.error(`Background: 流式处理失败 (${action}):`, error);
@@ -357,10 +370,29 @@ class BackgroundScript {
     }
   }
 
+  async handleCustomPrompt(text, customPrompt, stream = false) {
+    try {
+      if (!this.llmService) {
+        throw new Error('API密钥未设置');
+      }
+
+      let prompt;
+      if (customPrompt && customPrompt.includes('{text}')) {
+        prompt = customPrompt.replace('{text}', text);
+      } else {
+        prompt = `${customPrompt}\n\n${text}`;
+      }
+      const result = await this.llmService.callAPI(prompt, this.modelName, stream);
+      return result;
+    } catch (error) {
+      console.error('自定义处理失败:', error);
+      return '自定义处理失败: ' + error.message;
+    }
+  }
+
   async setApiKey(apiKey, modelName = 'doubao-seed-1-6-thinking-250715') {
-    console.log('Background: 开始保存API设置');
+    console.log('Background: 开始保存API密钥');
     this.apiKey = apiKey;
-    this.modelName = modelName;
     
     try {
       this.llmService = new LLMService(apiKey);
@@ -371,78 +403,18 @@ class BackgroundScript {
     }
     
     // 保存到存储
-    await chrome.storage.sync.set({ apiKey: apiKey, modelName: modelName });
-    console.log('Background: API设置保存完成');
+    await chrome.storage.sync.set({ apiKey: apiKey });
+    console.log('Background: API密钥保存完成');
   }
 
-  createContextMenus() {
-    // 清除现有菜单
-    chrome.contextMenus.removeAll(() => {
-      // 创建解释选中文本菜单
-      chrome.contextMenus.create({
-        id: 'explain-selected-text',
-        title: '解释选中文本',
-        contexts: ['selection']
-      });
-
-      // 创建翻译选中文本菜单
-      chrome.contextMenus.create({
-        id: 'translate-selected-text',
-        title: '翻译选中文本',
-        contexts: ['selection']
+  showError(message) {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      chrome.tabs.sendMessage(tabs[0].id, {
+        type: 'SHOW_RESULT',
+        result: `<div style="color: red;">${message}</div>`,
+        originalText: ''
       });
     });
-  }
-
-  // 更新右键菜单标题，显示选中文本的长度
-  updateContextMenuTitle(info) {
-    const selectedText = info.selectionText.trim();
-    const textLength = selectedText.length;
-    
-    chrome.contextMenus.update('explain-selected-text', {
-      title: `解释选中文本 (${textLength}字符)`
-    });
-    
-    chrome.contextMenus.update('translate-selected-text', {
-      title: `翻译选中文本 (${textLength}字符)`
-    });
-  }
-
-  async handleContextMenuClick(info, tab) {
-    const selectedText = info.selectionText.trim();
-    
-    if (!selectedText) {
-      console.log('没有选中文本');
-      return;
-    }
-
-    // 检查API密钥是否已设置
-    if (!this.apiKey) {
-      console.log('API密钥未设置，无法执行操作');
-      return;
-    }
-
-    try {
-      // 打开插件弹窗
-      await chrome.action.openPopup();
-      
-      // 等待弹窗打开后发送消息
-      setTimeout(async () => {
-        try {
-          // 发送消息到popup，包含选中的文本和操作类型
-          await chrome.runtime.sendMessage({
-            type: 'CONTEXT_MENU_ACTION',
-            text: selectedText,
-            action: info.menuItemId
-          });
-        } catch (error) {
-          console.error('发送右键菜单消息失败:', error);
-        }
-      }, 200); // 增加等待时间确保弹窗完全打开
-      
-    } catch (error) {
-      console.error('打开插件弹窗失败:', error);
-    }
   }
 }
 

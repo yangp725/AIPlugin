@@ -8,6 +8,9 @@ class PopupScript {
     // 加载保存的API密钥
     this.loadApiKey();
     
+    // 加载保存的自定义提示词
+    this.loadCustomPrompt();
+    
     // 加载缓存的历史记录
     this.loadHistory();
     
@@ -17,19 +20,32 @@ class PopupScript {
     // 获取所有按钮和输入框
     this.saveApiKeyBtn = document.getElementById('saveApiKey');
     this.updateApiKeyBtn = document.getElementById('updateApiKey');
+    this.saveCustomPromptBtn = document.getElementById('saveCustomPrompt');
+    this.updateCustomPromptBtn = document.getElementById('updateCustomPrompt');
     this.explainBtn = document.getElementById('explainBtn');
     this.translateBtn = document.getElementById('translateBtn');
-    this.chatBtn = document.getElementById('chatBtn'); // 新增对话按钮
-    this.inputText = document.getElementById('inputText'); // 输入文本框
-    this.clearHistoryBtn = document.getElementById('clearHistory'); // 清除历史按钮
+    this.chatBtn = document.getElementById('chatBtn');
+    this.customBtn = document.getElementById('customBtn');
+    this.inputText = document.getElementById('inputText');
+    this.clearHistoryBtn = document.getElementById('clearHistory');
+    this.saveModelBtn=document.getElementById('saveModelName');
+    this.updateModelBtn=document.getElementById('updateModelName');
 
     // 绑定事件
     this.saveApiKeyBtn.addEventListener('click', this.saveApiKey.bind(this));
     this.updateApiKeyBtn.addEventListener('click', this.updateApiKey.bind(this));
+    this.saveCustomPromptBtn.addEventListener('click', this.saveCustomPrompt.bind(this));
+    this.updateCustomPromptBtn.addEventListener('click', this.updateCustomPrompt.bind(this));
     this.explainBtn.addEventListener('click', this.explainText.bind(this));
     this.translateBtn.addEventListener('click', this.translateText.bind(this));
-    this.chatBtn.addEventListener('click', this.directChat.bind(this)); // 新增对话事件
-    this.clearHistoryBtn.addEventListener('click', this.clearHistory.bind(this)); // 清除历史事件
+    this.chatBtn.addEventListener('click', this.directChat.bind(this));
+    this.customBtn.addEventListener('click', this.customAction.bind(this));
+    this.clearHistoryBtn.addEventListener('click', this.clearHistory.bind(this));
+    this.saveModelBtn.addEventListener('click',this.saveModelName.bind(this));
+    this.updateModelBtn.addEventListener('click',this.updateModelName.bind(this));
+    document.getElementById('customPrompt').addEventListener('input', ()=>{
+      this.showCustomPromptEditState();
+    });
 
     // 监听来自background的消息
     chrome.runtime.onMessage.addListener(this.handleBackgroundMessage.bind(this));
@@ -69,6 +85,59 @@ class PopupScript {
     } catch (error) {
       console.error('加载API密钥失败:', error);
     }
+  }
+
+  async loadCustomPrompt() {
+    try {
+      const result = await chrome.storage.sync.get(['customPrompt']);
+      if (result.customPrompt) {
+        document.getElementById('customPrompt').value = result.customPrompt;
+        this.showCustomPromptSavedState();
+      }
+    } catch (error) {
+      console.error('加载自定义提示词失败:', error);
+    }
+  }
+
+  async saveCustomPrompt() {
+    const customPrompt = document.getElementById('customPrompt').value.trim();
+    
+    if (!customPrompt) {
+      this.showStatus('请输入自定义提示词', 'error');
+      return;
+    }
+
+    this.showStatus('正在保存自定义提示词...', 'success');
+    
+    try {
+      await chrome.storage.sync.set({ customPrompt: customPrompt });
+      this.showStatus('✅ 自定义提示词保存成功！', 'success');
+      this.showCustomPromptSavedState();
+    } catch (error) {
+      console.error('保存自定义提示词失败:', error);
+      this.showStatus('❌ 保存自定义提示词失败: ' + error.message, 'error');
+    }
+  }
+
+  showCustomPromptSavedState() {
+    const saveButton = document.getElementById('saveCustomPrompt');
+    const updateButton = document.getElementById('updateCustomPrompt');
+    
+    if (saveButton && updateButton) {
+      saveButton.style.display = 'none';
+      updateButton.style.display = 'block';
+    }
+  }
+
+  showCustomPromptEditState() {
+    document.getElementById('saveCustomPrompt').style.display = 'block';
+    document.getElementById('updateCustomPrompt').style.display = 'none';
+  }
+
+  updateCustomPrompt() {
+    this.showCustomPromptEditState();
+    document.getElementById('customPrompt').focus();
+    this.showStatus('请修改自定义提示词', 'success');
   }
 
   async loadHistory() {
@@ -249,6 +318,76 @@ class PopupScript {
       }
     } else {
       this.showStatus('请输入对话内容', 'error');
+    }
+  }
+
+  async customAction() {
+    const text = document.getElementById('inputText').value.trim();
+    const streamMode = document.getElementById('streamMode').checked;
+    
+    if (!text) {
+      this.showStatus('请在文本框中输入要处理的文本', 'error');
+      return;
+    }
+
+    try {
+      const result = await chrome.storage.sync.get(['customPrompt']);
+      if (!result.customPrompt) {
+        this.showStatus('请先在设置中配置自定义提示词', 'error');
+        return;
+      }
+
+      this.showStatus('正在使用自定义提示词处理...', 'success');
+      
+      if (streamMode) {
+        await this.handleCustomStreamResponse(text, result.customPrompt);
+      } else {
+        const response = await chrome.runtime.sendMessage({
+          type: 'CUSTOM_PROMPT',
+          text: text,
+          prompt: result.customPrompt,
+          stream: false
+        });
+        
+        this.showResultInPopup(response, text);
+        await this.saveHistory(text, response, '自定义处理');
+      }
+      
+    } catch (error) {
+      console.error('自定义处理失败:', error);
+      this.showStatus('自定义处理失败: ' + error.message, 'error');
+    }
+  }
+
+  async handleCustomStreamResponse(text, customPrompt) {
+    const resultContainer = this.createStreamResultContainer(text);
+    this.updateStreamResult(resultContainer, '');
+
+    try {
+      const port = chrome.runtime.connect({ name: 'llm-stream' });
+      port.postMessage({ type: 'CUSTOM_PROMPT_STREAM', text: text, prompt: customPrompt });
+
+      port.onMessage.addListener((message) => {
+        switch (message.type) {
+          case 'STREAM_DATA':
+            console.log('[POPUP] 收到流式数据:', message.content);
+            this.updateStreamResult(resultContainer, message.content);
+            break;
+          case 'STREAM_END':
+            const finalResult = resultContainer.querySelector('.stream-content').textContent;
+            this.saveHistory(text, finalResult, '自定义处理');
+            port.disconnect();
+            break;
+          case 'STREAM_ERROR':
+            this.updateStreamResult(resultContainer, `\n错误: ${message.error}`);
+            port.disconnect();
+            break;
+        }
+      });
+
+    } catch (error) {
+      console.error('创建端口连接失败:', error);
+      this.updateStreamResult(resultContainer, `连接失败: ${error.message}`);
     }
   }
 
@@ -472,6 +611,20 @@ class PopupScript {
       statusElement.style.display = 'none';
     }, displayTime);
   }
+
+  async loadModelName(){
+    const res=await chrome.storage.sync.get(['modelName']);
+    if(res.modelName){document.getElementById('modelName').value=res.modelName;this.showModelSaved();}
+  }
+  async saveModelName(){
+    const name=document.getElementById('modelName').value.trim();
+    if(!name){this.showStatus('请输入模型名称','error');return;}
+    await chrome.storage.sync.set({modelName:name});
+    chrome.runtime.sendMessage({type:'SET_MODEL_NAME',modelName:name});
+    this.showModelSaved();this.showStatus('✅ 模型名称已保存','success');
+  }
+  showModelSaved(){document.getElementById('saveModelName').style.display='none';document.getElementById('updateModelName').style.display='block';}
+  updateModelName(){document.getElementById('saveModelName').style.display='block';document.getElementById('updateModelName').style.display='none';this.showStatus('请修改模型名称','success');}
 }
 
 // 初始化弹出窗口脚本

@@ -295,9 +295,10 @@
           <textarea id="inputText" placeholder="请输入要查询或翻译的文本" rows="3"></textarea>
         </div>
         <div class="btn-row">
-          <button class="btn btn-secondary" id="chatBtn">直接对话</button>
-          <button class="btn btn-secondary" id="explainBtn">解释文本</button>
-          <button class="btn btn-secondary" id="translateBtn">翻译文本</button>
+          <button class="btn btn-secondary" id="chatBtn">对话</button>
+          <button class="btn btn-secondary" id="explainBtn">解释</button>
+          <button class="btn btn-secondary" id="translateBtn">翻译</button>
+          <button class="btn btn-secondary" id="customBtn">自定义</button>
         </div>
       </div>
       
@@ -310,7 +311,6 @@
     <!-- API 设置 Tab -->
     <div id="settings-tab" class="tab-content">
       <div class="section">
-        <h2>API 密钥</h2>
         <div class="input-group">
           <label for="apiKey">豆包AI API Key:</label>
           <input type="password" id="apiKey" placeholder="请输入您的API密钥">
@@ -322,7 +322,28 @@
       </div>
       
       <div class="section">
-        <h2>设置选项</h2>
+        <div class="input-group">
+          <label for="modelName">模型名称:</label>
+          <input type="text" id="modelName" placeholder="doubao-seed-1-6-thinking-250715">
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-primary" id="saveModelName">保存模型名称</button>
+          <button class="btn btn-success" id="updateModelName" style="display:none;">模型名称已保存</button>
+        </div>
+      </div>
+      
+      <div class="section">
+        <div class="input-group">
+          <label for="customPrompt">自定义Prompt:</label>
+          <textarea id="customPrompt" placeholder="请输入您的自定义提示词，例如：请将以下内容总结为要点：&#10;&#10;{text}" rows="4"></textarea>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-primary" id="saveCustomPrompt">保存自定义提示词</button>
+          <button class="btn btn-success" id="updateCustomPrompt" style="display: none;">自定义提示词已保存</button>
+        </div>
+      </div>
+      
+      <div class="section">
         <div class="checkbox-group">
           <label>
             <input type="checkbox" id="streamMode" checked> 启用流式响应（默认）
