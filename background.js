@@ -133,6 +133,7 @@ class LLMService {
 
     try {
       port.postMessage({ type: 'STREAM_START' });
+      this._gotFirst=false;
       while (true) {
         const { done, value } = await reader.read();
         if (done) {
@@ -156,6 +157,10 @@ class LLMService {
               if (parsed.choices && parsed.choices[0] && parsed.choices[0].delta) {
                 const content = parsed.choices[0].delta.content;
                 if (content) {
+                  if(!this._gotFirst){
+                    console.log('[BG] 收到第一块流式数据:', content);
+                    this._gotFirst=true;
+                  }
                   port.postMessage({ type: 'STREAM_DATA', content: content });
                 }
               }
@@ -167,7 +172,7 @@ class LLMService {
       }
     } catch (error) {
       console.error('流式响应处理失败:', error);
-      port.postMessage({ type: 'STREAM_ERROR', error: error.message });
+      try { port.postMessage({ type: 'STREAM_ERROR', error: error.message }); } catch(e){ console.warn('port closed, skip error post'); }
     } finally {
       reader.releaseLock();
     }
@@ -341,9 +346,9 @@ class BackgroundScript {
 
     } catch (error) {
       console.error(`Background: 流式处理失败 (${action}):`, error);
-      port.postMessage({ type: 'STREAM_ERROR', error: error.message });
+      try { port.postMessage({ type: 'STREAM_ERROR', error: error.message }); } catch(e){ console.warn('port closed, skip error post'); }
     } finally {
-      port.disconnect();
+      // 不再在此主动 disconnect，交由流处理函数负责
     }
   }
 
