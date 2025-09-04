@@ -232,6 +232,11 @@ class BackgroundScript {
       }
     }
 
+    // 创建右键菜单
+    this.createContextMenus();
+    // 监听右键菜单点击
+    chrome.contextMenus.onClicked.addListener(this.handleContextMenuClick.bind(this));
+
     // 监听来自content script或popup的消息
     chrome.runtime.onMessage.addListener(this.handleMessage.bind(this));
     // 监听长连接
@@ -415,6 +420,38 @@ class BackgroundScript {
         originalText: ''
       });
     });
+  }
+
+  createContextMenus() {
+    chrome.contextMenus.removeAll(() => {
+      const items = [
+        {id:'explain-selected-text',title:'解释选中文本'},
+        {id:'translate-selected-text',title:'翻译选中文本'},
+        {id:'custom-selected-text',title:'自定义处理'}
+      ];
+      items.forEach(it=>{
+        chrome.contextMenus.create({
+          id:it.id,
+          title:it.title,
+          contexts:['selection']
+        });
+      });
+    });
+  }
+
+  async handleContextMenuClick(info, tab){
+    const selectedText = info.selectionText?.trim();
+    if(!selectedText) return;
+    // 打开弹窗
+    await chrome.action.openPopup();
+    // 等待 150ms 让 popup 初始化
+    setTimeout(()=>{
+      chrome.runtime.sendMessage({
+        type:'CONTEXT_MENU_ACTION',
+        text:selectedText,
+        action:info.menuItemId
+      });
+    },150);
   }
 }
 
