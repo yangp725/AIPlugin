@@ -7,7 +7,7 @@ class LLMService {
     this.baseUrl = 'https://ark.cn-beijing.volces.com/api/v3';
   }
 
-  async callAPI(prompt, model = 'doubao-seed-1-6-thinking-250715', stream = true, port = null) {
+  async callAPI(prompt, model = 'doubao-seed-1-6-thinking-250715', stream = true, port = null, meta = null) {
     try {
       console.log('LLM API调用开始:', { prompt: prompt.substring(0, 50) + '...', model, stream });
       
@@ -44,11 +44,12 @@ class LLMService {
         // 流式响应处理
         if (port) {
           // 如果提供了port，则通过port流式传输数据
-          await this.handleStreamResponseWithPort(response, port);
+          await this.handleStreamResponseWithPort(response, port, meta);
           return; // 由handleStreamResponseWithPort处理完成
         } else {
-          // 否则，收集完整结果后返回
-          return this.handleStreamResponse(response);
+          // 如果没有port，使用后台独立处理
+          await this.handleStreamResponseBackground(response, meta);
+          return; // 由后台处理完成
         }
       } else {
         // 非流式响应处理
@@ -127,17 +128,19 @@ class LLMService {
     return result;
   }
 
-  async handleStreamResponseWithPort(response, port) {
+  // 后台独立处理流式响应，不依赖前端连接
+  async handleStreamResponseBackground(response, meta) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
+    let accumulatedContent = '';
+    let isFirstChunk = true;
 
     try {
-      port.postMessage({ type: 'STREAM_START' });
-      this._gotFirst=false;
+      console.log('[BG] 开始后台独立处理流式响应');
+      
       while (true) {
         const { done, value } = await reader.read();
         if (done) {
-          port.postMessage({ type: 'STREAM_END' });
           break;
         }
 
@@ -148,8 +151,7 @@ class LLMService {
           if (line.startsWith('data: ')) {
             const data = line.slice(6);
             if (data === '[DONE]') {
-              port.postMessage({ type: 'STREAM_END' });
-              return;
+              break;
             }
 
             try {
@@ -157,11 +159,11 @@ class LLMService {
               if (parsed.choices && parsed.choices[0] && parsed.choices[0].delta) {
                 const content = parsed.choices[0].delta.content;
                 if (content) {
-                  if(!this._gotFirst){
+                  accumulatedContent += content;
+                  if (isFirstChunk) {
                     console.log('[BG] 收到第一块流式数据:', content);
-                    this._gotFirst=true;
+                    isFirstChunk = false;
                   }
-                  port.postMessage({ type: 'STREAM_DATA', content: content });
                 }
               }
             } catch (e) {
@@ -170,9 +172,128 @@ class LLMService {
           }
         }
       }
+      
+      // 保存完整结果到历史记录
+      await chrome.storage.sync.set({
+        lastInput: meta.input,
+        lastResult: accumulatedContent,
+        lastAction: meta.actionName,
+        lastUpdateTime: Date.now()
+      });
+      
+      console.log('[BG] 后台流式处理完成，结果已保存到历史');
+      
+    } catch (error) {
+      console.error('[BG] 后台流式响应处理失败:', error);
+      
+      // 保存错误结果到历史记录
+      await chrome.storage.sync.set({
+        lastInput: meta.input,
+        lastResult: accumulatedContent + `\n错误: ${error.message}`,
+        lastAction: meta.actionName,
+        lastUpdateTime: Date.now()
+      });
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  async handleStreamResponseWithPort(response, port, meta) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let accumulatedContent = '';
+    let portClosed = false;
+    let isFirstChunk = true;
+    
+    port.onDisconnect.addListener(() => portClosed = true);
+
+    try {
+      if (!portClosed) {
+        try {
+          port.postMessage({ type: 'STREAM_START' });
+        } catch (e) {
+          console.warn('Port closed during STREAM_START postMessage, skipping:', e);
+        }
+      }
+      
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6);
+            if (data === '[DONE]') {
+              break;
+            }
+
+            try {
+              const parsed = JSON.parse(data);
+              if (parsed.choices && parsed.choices[0] && parsed.choices[0].delta) {
+                const content = parsed.choices[0].delta.content;
+                if (content) {
+                  accumulatedContent += content;
+                  if (isFirstChunk) {
+                    console.log('[BG] 收到第一块流式数据:', content);
+                    isFirstChunk = false;
+                  }
+                  if (!portClosed) {
+                    try {
+                      port.postMessage({ type: 'STREAM_DATA', content: content });
+                    } catch (e) {
+                      console.warn('Port closed during STREAM_DATA postMessage, skipping:', e);
+                    }
+                  }
+                }
+              }
+            } catch (e) {
+              console.log('解析流式数据失败:', e);
+            }
+          }
+        }
+      }
+      
+      // 保存结果到历史记录
+      await chrome.storage.sync.set({
+        lastInput: meta.input,
+        lastResult: accumulatedContent,
+        lastAction: meta.actionName,
+        lastUpdateTime: Date.now()
+      });
+      
+      if (!portClosed) {
+        try {
+          port.postMessage({ type: 'STREAM_END' });
+          port.disconnect();
+        } catch (e) {
+          console.warn('Port closed during STREAM_END postMessage/disconnect, skipping:', e);
+        }
+      }
+      
     } catch (error) {
       console.error('流式响应处理失败:', error);
-      try { port.postMessage({ type: 'STREAM_ERROR', error: error.message }); } catch(e){ console.warn('port closed, skip error post'); }
+      
+      // 保存错误结果到历史记录
+      await chrome.storage.sync.set({
+        lastInput: meta.input,
+        lastResult: accumulatedContent + `\n错误: ${error.message}`,
+        lastAction: meta.actionName,
+        lastUpdateTime: Date.now()
+      });
+      
+      if (!portClosed) {
+        try { 
+          port.postMessage({ type: 'STREAM_ERROR', error: error.message }); 
+          port.disconnect();
+        } catch(e) { 
+          console.warn('port closed, skip error post'); 
+        }
+      }
     } finally {
       reader.releaseLock();
     }
@@ -318,6 +439,40 @@ class BackgroundScript {
     });
   }
 
+  // 后台独立处理流式请求，不依赖前端连接
+  async handleStreamRequestBackground(text, action, customPrompt = null) {
+    try {
+      if (!this.llmService) {
+        throw new Error('API密钥未设置');
+      }
+
+      let prompt;
+      if (action === 'explain') {
+        prompt = `请对以下内容进行解释：\n\n${text}`;
+      } else if (action === 'translate') {
+        const isChinese = /[\u4e00-\u9fff]/.test(text);
+        prompt = isChinese ? `请将以下内容翻译成英文：\n\n${text}` : `请将以下内容翻译成中文：\n\n${text}`;
+      } else if (action === 'custom') {
+        if (customPrompt && customPrompt.includes('{text}')) {
+          prompt = customPrompt.replace('{text}', text);
+        } else {
+          prompt = `${customPrompt}\n\n${text}`;
+        }
+      } else { // direct_chat
+        prompt = text;
+      }
+      
+      const actionName = action==='explain'? '解释' : action==='translate'? '翻译' : action==='custom'? '自定义处理' : '对话';
+      const meta = {input:text, actionName:actionName};
+      
+      console.log('[BG] 开始后台独立处理流式请求:', action);
+      await this.llmService.callAPI(prompt, this.modelName, true, null, meta);
+
+    } catch (error) {
+      console.error(`[BG] 后台流式处理失败 (${action}):`, error);
+    }
+  }
+
   async handleStreamRequest(text, action, port, customPrompt = null) {
     try {
       if (!this.llmService) {
@@ -326,7 +481,7 @@ class BackgroundScript {
 
       let prompt;
       if (action === 'explain') {
-        prompt = `请对以下内容进行详细解释：\n\n${text}`;
+        prompt = `请对以下内容进行解释：\n\n${text}`;
       } else if (action === 'translate') {
         const isChinese = /[\u4e00-\u9fff]/.test(text);
         prompt = isChinese ? `请将以下内容翻译成英文：\n\n${text}` : `请将以下内容翻译成中文：\n\n${text}`;
@@ -341,8 +496,11 @@ class BackgroundScript {
         prompt = text;
       }
       
+      const actionName = action==='explain'? '解释' : action==='translate'? '翻译' : action==='custom'? '自定义处理' : '对话';
+      // 把本次请求信息记录，供流结束后写历史
+      const meta={input:text,action:actionName};
       // 直接调用流式API，并通过port传递数据
-      await this.llmService.callAPI(prompt, this.modelName, true, port);
+      await this.llmService.callAPI(prompt, this.modelName, true, port, meta);
 
     } catch (error) {
       console.error(`Background: 流式处理失败 (${action}):`, error);

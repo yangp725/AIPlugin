@@ -437,6 +437,7 @@ class PopupScript {
             console.log('流式传输开始...');
             break;
           case 'STREAM_DATA':
+            console.log('[POPUP] 收到流式数据:', message.content);
             this.updateStreamResult(resultContainer, message.content);
             break;
           case 'STREAM_END':
